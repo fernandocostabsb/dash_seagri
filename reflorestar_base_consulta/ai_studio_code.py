@@ -9,185 +9,165 @@ from PIL import Image
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="Seagri - Reflorestar", layout="wide", page_icon="🌳")
 
-# 2. ESTILIZAÇÃO PARA ACESSIBILIDADE (CLARO/ESCURO) E CORES SEAGRI
+# 2. CSS PARA CORRIGIR VISUALIZAÇÃO (TEMA CLARO/ESCURO)
 st.markdown("""
     <style>
-    /* Estilização da Sidebar */
-    [data-testid="stSidebar"] { background-color: #0066b3; }
-    [data-testid="stSidebar"] * { color: white !important; }
-    
-    /* Input de texto na sidebar - garantir visibilidade */
-    .stTextInput input { color: black !important; background-color: white !important; }
-
-    /* Cores de títulos e textos principais */
-    h1, h2, h3 { color: #0066b3 !important; }
-    
-    /* Card de Resultado (Fundo fixo para leitura universal) */
-    .result-card {
-        background-color: #f9f9f9;
-        padding: 20px;
-        border-radius: 10px;
-        border-left: 5px solid #f39200;
-        margin-bottom: 20px;
-        color: #1a1a1a !important; /* Fonte escura para leitura em qualquer tema */
+    /* Fundo da barra lateral */
+    [data-testid="stSidebar"] {
+        background-color: #0066b3 !important;
+    }
+    /* Estilo para labels e inputs na barra lateral */
+    [data-testid="stSidebar"] label {
+        color: white !important;
+        font-weight: bold !important;
+    }
+    [data-testid="stSidebar"] input {
+        color: #1a1a1a !important;
+        background-color: #ffffff !important;
+        border: 2px solid #f39200 !important;
+    }
+    /* Texto dos botões e mensagens de erro na sidebar */
+    .stSidebar .stMarkdown p {
+        color: white !important;
     }
     
-    .stExpander { border: 1px solid #0066b3 !important; background-color: #f0f2f6; }
+    /* Cores Seagri no corpo do app */
+    h1, h2, h3 { color: #0066b3 !important; }
     
-    /* Estilo para dados ocultos */
-    .hidden-data { color: #d32f2f; font-style: italic; font-weight: bold; }
+    /* Expander de resultados */
+    .stExpander {
+        border: 2px solid #f39200 !important;
+        background-color: #f8f9fa !important;
+        color: black !important;
+    }
+    .stExpander * { color: black !important; }
+    
+    /* Ajuste para o Processo SEI ficar visível */
+    .sei-style {
+        color: #2e7d32 !important;
+        font-weight: bold;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# 3. FUNÇÕES DE SUPORTE E CARREGAMENTO
-def dms_to_decimal(coord_str):
-    try:
-        if not coord_str or pd.isna(coord_str): return None
-        parts = re.findall(r"(\d+)°(\d+)'?([\d.]+)?", str(coord_str))
-        if not parts: return None
-        d, m, s = float(parts[0][0]), float(parts[0][1]), float(parts[0][2] if parts[0][2] else 0)
-        dec = d + m/60 + s/3600
-        if any(c in str(coord_str).upper() for c in ['S', 'W', 'O']): dec *= -1
-        return dec
-    except: return None
-
+# 3. FUNÇÃO DE CARREGAMENTO COM LIMPEZA DE COLUNAS
 @st.cache_data
 def carregar_dados():
     def ler_csv(nome):
         for root, dirs, files in os.walk("."):
             if nome in files:
-                return pd.read_csv(os.path.join(root, nome), dtype=str).fillna("")
+                path = os.path.join(root, nome)
+                df = pd.read_csv(path, dtype=str).fillna("")
+                # LIMPEZA CRÍTICA: remove espaços extras dos nomes das colunas
+                df.columns = df.columns.str.strip()
+                return df
         return pd.DataFrame()
-    return ler_csv('cadastro_beneficiarios.csv'), ler_csv('cadastro_unidades.csv'), ler_csv('cadastro_doacoes.csv'), ler_csv('cadastro_seagri_interno.csv')
-
-df_ben, df_und, df_doa, df_interno = carregar_dados()
-
-# 4. SISTEMA DE AUTORIZAÇÃO (LOGIN) NA SIDEBAR
-st.sidebar.markdown("## 🔐 Acesso Restrito")
-with st.sidebar.expander("Identificação do Usuário"):
-    user_email = st.text_input("E-mail corporativo")
-    user_fone = st.text_input("Telefone (apenas números)")
     
-    # Validação do Usuário
-    acesso_total = False
-    if user_email and user_fone:
-        # Limpa telefone para busca
-        fone_busca = re.sub(r'\D', '', user_fone)
-        match = df_interno[
-            (df_interno['Email'].str.lower() == user_email.lower()) & 
-            (df_interno['Fone'].str.replace(r'\D', '', regex=True).str.contains(fone_busca))
-        ]
-        if not match.empty:
-            st.success("✅ Acesso Total Autorizado")
-            acesso_total = True
-        else:
-            st.error("❌ Usuário não cadastrado.")
+    return ler_csv('cadastro_beneficiarios.csv'), \
+           ler_csv('cadastro_unidades.csv'), \
+           ler_csv('cadastro_doacoes.csv'), \
+           ler_csv('cadastro_seagri_interno.csv')
 
-# 5. CABEÇALHO COM LOGO
+df_ben, df_und, df_doa, df_int = carregar_dados()
+
+# 4. AUTENTICAÇÃO
+st.sidebar.markdown("## 🔐 Acesso ao Sistema")
+with st.sidebar.container():
+    u_email = st.text_input("E-mail corporativo").strip().lower()
+    u_fone = st.text_input("Telefone (ex: 61981591367)").strip()
+    
+    acesso_total = False
+    if u_email and u_fone:
+        # Limpa o fone digitado e o fone do banco para comparar apenas números
+        u_fone_limpo = re.sub(r'\D', '', u_fone)
+        
+        if not df_int.empty:
+            # Compara e-mail e fone (limpando espaços e caracteres especiais)
+            valido = df_int[
+                (df_int['Email'].str.strip().str.lower() == u_email) & 
+                (df_int['Fone'].str.replace(r'\D', '', regex=True) == u_fone_limpo)
+            ]
+            
+            if not valido.empty:
+                st.sidebar.success("✅ Acesso Total Autorizado")
+                acesso_total = True
+            else:
+                st.sidebar.error("❌ Dados não conferem.")
+        else:
+            st.sidebar.error("⚠️ Base de usuários não encontrada.")
+
+# 5. LOGO E TÍTULO
 logo_path = "logo_seagri.png"
+# Busca logo se estiver em subpasta
 for root, dirs, files in os.walk("."):
     if "logo_seagri.png" in files:
         logo_path = os.path.join(root, "logo_seagri.png")
         break
 
-col_logo, col_tit = st.columns([1, 4])
-with col_logo:
-    if os.path.exists(logo_path): st.image(logo_path, width=140)
-with col_tit:
+c_l, c_t = st.columns([1, 4])
+with c_l:
+    if os.path.exists(logo_path): st.image(logo_path, width=150)
+with c_t:
     st.title("Sistema Reflorestar - SEAGRI-DF")
-    st.write(f"Nível de Acesso: {'**TOTAL (INTERNO)**' if acesso_total else '**RESTRITO (PÚBLICO)**'}")
+    status = "🔓 TOTAL" if acesso_total else "🔒 RESTRITO (Público)"
+    st.write(f"Nível de Acesso: **{status}**")
 
-# 6. FILTROS DE CONSULTA
-if df_ben is not None and not df_ben.empty:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🔎 Critérios de Busca")
-    busca_texto = st.sidebar.text_input("Busca Nome, CPF, CAR ou Telefone")
+# 6. FILTROS DE BUSCA
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔎 Filtrar Dados")
+busca = st.sidebar.text_input("Nome, CPF, CAR ou Telefone")
+
+# 7. LÓGICA DE EXIBIÇÃO
+if not df_ben.empty:
+    res = df_ben.copy()
     
-    localidades = sorted([l for l in df_ben['IDLocalidade'].unique() if l])
-    localidade_sel = st.sidebar.selectbox("Filtrar por Localidade / R.A.", ["Todas"] + localidades)
-
-    bacias = sorted([b for b in df_und['Unidade Hidro'].unique() if b])
-    bacia_sel = st.sidebar.selectbox("Filtrar por Bacia Hidrográfica", ["Todas"] + bacias)
-
-    # Lógica de Filtragem
-    res_ben = df_ben.copy()
-    if busca_texto:
-        busca_num = re.sub(r'\D', '', busca_texto)
-        res_ben = res_ben[
-            res_ben['Nome'].str.contains(busca_texto, case=False) |
-            res_ben['Código do CAR'].str.contains(busca_texto, case=False) |
-            res_ben['CPF'].str.replace(r'\D', '', regex=True).str.contains(busca_num) |
-            res_ben['Fone 1'].str.replace(r'\D', '', regex=True).str.contains(busca_num)
+    if busca:
+        b_limpa = re.sub(r'\D', '', busca)
+        res = res[
+            res['Nome'].str.contains(busca, case=False) |
+            res['Código do CAR'].str.contains(busca, case=False) |
+            res['CPF'].str.replace(r'\D', '', regex=True).str.contains(b_limpa if b_limpa else "XXXXX") |
+            res['Fone 1'].str.replace(r'\D', '', regex=True).str.contains(b_limpa if b_limpa else "XXXXX")
         ]
-    if localidade_sel != "Todas":
-        res_ben = res_ben[res_ben['IDLocalidade'] == localidade_sel]
 
-    # 7. EXIBIÇÃO DOS RESULTADOS
-    if busca_texto or localidade_sel != "Todas" or bacia_sel != "Todas":
-        for _, ben in res_ben.iterrows():
-            unds = df_und[df_und['Beneficiário'] == ben['Nome']]
-            if bacia_sel != "Todas":
-                unds = unds[unds['Unidade Hidro'] == bacia_sel]
-                if unds.empty: continue
-
-            # Títulos sempre visíveis
+    if busca:
+        for _, ben in res.iterrows():
             with st.expander(f"👤 {ben['Nome'].upper()}", expanded=True):
-                # Formatação dos dados sensíveis
-                cpf_display = ben['CPF'] if acesso_total else "🔒 ACESSO RESTRITO"
-                fone_display = ben['Fone 1'] if acesso_total else "🔒 ACESSO RESTRITO"
+                # Dados sensíveis ocultos se não for usuário interno
+                cpf_val = ben['CPF'] if acesso_total else "🔒 Oculto (Faça Login)"
+                fone_val = ben['Fone 1'] if acesso_total else "🔒 Oculto (Faça Login)"
                 
-                # Layout de colunas para o Beneficiário
-                c1, c2, c3 = st.columns([1.5, 1.5, 1])
-                with c1:
-                    st.write(f"**CPF/CNPJ:** {cpf_display}")
-                    st.write(f"**Tamanho da Área:** {ben['Tamanho da propriedade (ha)']} ha")
-                with c2:
-                    st.write(f"**Processo SEI:** :green[{ben['N° Processo SEI']}]")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write(f"**CPF/CNPJ:** {cpf_val}")
+                    st.write(f"**Área:** {ben['Tamanho da propriedade (ha)']} ha")
+                with col2:
+                    st.markdown(f"**Processo SEI:** <span class='sei-style'>{ben['N° Processo SEI']}</span>", unsafe_allow_html=True)
                     st.write(f"**Localidade:** {ben['IDLocalidade']}")
-                with c3:
-                    st.write(f"**Telefone:** {fone_display}")
+                with col3:
+                    st.write(f"**Telefone:** {fone_val}")
                     st.write(f"**CAR:** {ben['Código do CAR']}")
 
-                if ben['Observações']:
-                    st.warning(f"**Obs Beneficiário:** {ben['Observações']}")
-
-                # Seção de Unidades
-                st.markdown("---")
+                # Unidades e Doações
+                unds = df_und[df_und['Beneficiário'] == ben['Nome']]
                 if not unds.empty:
-                    m = folium.Map(location=[-15.7, -48.0], zoom_start=10)
-                    tem_mapa = False
-
+                    st.markdown("---")
                     for _, u in unds.iterrows():
                         st.markdown(f"📍 **Unidade {u['ID und reabilitação']}** - *{u['Tipo de Und']}*")
-                        cu1, cu2 = st.columns([1, 2])
-                        with cu1:
-                            st.write(f"**Bacia:** {u['Unidade Hidro']}")
-                            if u['Observação']: st.info(f"**Obs Unidade:** {u['Observação']}")
-                        
-                        with cu2:
-                            doas = df_doa[df_doa['ID Und Reab'] == u['ID und reabilitação']]
-                            if not doas.empty:
-                                st.dataframe(doas[['Data', 'ID fornecimento', 'SomaDequant', 'Política Pública', 'Origem das mudas']], hide_index=True)
-                            else:
-                                st.write("Nenhuma doação registrada.")
+                        doas = df_doa[df_doa['ID Und Reab'] == u['ID und reabilitação']]
+                        if not doas.empty:
+                            st.dataframe(doas[['Data', 'SomaDequant', 'Política Pública', 'Origem das mudas']], hide_index=True)
+                else:
+                    st.info("Nenhuma unidade vinculada.")
 
-                        # Coordenadas
-                        lat = dms_to_decimal(u['Coordenada Geográfica da Und de Reab']) or dms_to_decimal(ben['Coordenada Geo'])
-                        if lat:
-                            folium.Marker([lat, -48.0], popup=f"Unidade {u['ID und reabilitação']}").add_to(m)
-                            tem_mapa = True
-                    
-                    if tem_mapa:
-                        st_folium(m, width=1000, height=350, key=f"map_{ben['ID Beneficiário']}")
     else:
-        # Dashboard Resumo
+        # Dashboard Inicial
         st.markdown("### 📊 Estatísticas Gerais")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Beneficiários Cadastrados", len(df_ben))
-        total_mudas = pd.to_numeric(df_doa['SomaDequant'], errors='coerce').sum()
-        col2.metric("Mudas Distribuídas (Acumulado)", f"{int(total_mudas):,}")
-        col3.metric("Bacias Atendidas", len(df_und['Unidade Hidro'].unique()))
-        
-        st.info("Para visualizar dados sensíveis (CPF e Telefone), realize o login na barra lateral.")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Beneficiários", len(df_ben))
+        m_total = pd.to_numeric(df_doa['SomaDequant'], errors='coerce').sum()
+        m2.metric("Mudas Doadas", f"{int(m_total):,}")
+        m3.metric("Unidades de Plantio", len(df_und))
+        st.info("Digite um nome ou documento na barra lateral para detalhar a consulta.")
 else:
-    st.error("Base de dados não encontrada.")
+    st.error("Erro ao carregar base de dados. Verifique os arquivos CSV.")
