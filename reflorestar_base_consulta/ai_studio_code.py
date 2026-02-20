@@ -1,93 +1,114 @@
+import streamlit as st
 import pandas as pd
-import io
+import folium
+from streamlit_folium import st_folium
+import re
+import os
 
-def carregar_dados():
-    # Carregando os arquivos (ajuste os nomes se necessário)
-    # Nota: Usei sep=',' mas se for ponto-e-vírgula, mude para sep=';'
+# Configuração da Página
+st.set_page_config(page_title="Seagri - Dashboard de Mudas", layout="wide")
+
+# Função para limpar e converter coordenadas
+def dms_to_decimal(coord_str):
     try:
-        df_beneficiarios = pd.read_csv('cadastro_beneficiarios.csv', low_memory=False)
-        df_unidades = pd.read_csv('cadastro_unidades.csv', low_memory=False)
-        df_doacoes = pd.read_csv('cadastro_doacoes.csv', low_memory=False)
+        if not coord_str or pd.isna(coord_str): return None
+        parts = re.findall(r"(\d+)°(\d+)'?([\d.]+)?", str(coord_str))
+        if not parts: return None
+        d, m, s = float(parts[0][0]), float(parts[0][1]), float(parts[0][2] if parts[0][2] else 0)
+        dec = d + m/60 + s/3600
+        if any(c in str(coord_str).upper() for c in ['S', 'W', 'O']): dec *= -1
+        return dec
+    except: return None
+
+# Função para carregar os arquivos (ajustada para nuvem)
+def carregar_dados():
+    # Procura na pasta atual ou subpastas
+    arquivos = {
+        'ben': 'cadastro_beneficiarios.csv',
+        'und': 'cadastro_unidades.csv',
+        'doa': 'cadastro_doacoes.csv'
+    }
+    
+    dfs = {}
+    for chave, nome in arquivos.items():
+        # Tenta achar o arquivo no diretório raiz ou dentro da sua pasta
+        caminho_tentativa = None
+        for root, dirs, files in os.walk("."):
+            if nome in files:
+                caminho_tentativa = os.path.join(root, nome)
+                break
         
-        # Limpeza básica: remover espaços em branco dos nomes das colunas
-        df_beneficiarios.columns = df_beneficiarios.columns.str.strip()
-        df_unidades.columns = df_unidades.columns.str.strip()
-        df_doacoes.columns = df_doacoes.columns.str.strip()
-        
-        return df_beneficiarios, df_unidades, df_doacoes
-    except Exception as e:
-        print(f"Erro ao carregar arquivos: {e}")
-        return None, None, None
-
-def consultar(termo_busca):
-    df_ben, df_und, df_doa = carregar_dados()
-    if df_ben is None: return
-
-    # Normalizar termo de busca para string e remover pontuação de CPF/CNPJ/Fone
-    termo = str(termo_busca).strip().lower()
-
-    # Filtro no Cadastro de Beneficiários
-    # Busca em múltiplas colunas
-    resultado_ben = df_ben[
-        df_ben['Nome'].str.contains(termo, case=False, na=False) |
-        df_ben['CPF'].str.replace('[^0-9]', '', regex=True).str.contains(termo, na=False) |
-        df_ben['CNPJ'].str.replace('[^0-9]', '', regex=True).str.contains(termo, na=False) |
-        df_ben['Fone 1'].str.replace('[^0-9]', '', regex=True).str.contains(termo, na=False) |
-        df_ben['Código do CAR'].str.contains(termo, case=False, na=False)
-    ]
-
-    if resultado_ben.empty:
-        print("\nNenhum beneficiário encontrado.")
-        return
-
-    for _, ben in resultado_ben.iterrows():
-        nome_ben = ben['Nome']
-        id_ben = ben['ID Beneficiário']
-        coord_ben = ben['Coordenada Geo']
-        
-        print("-" * 50)
-        print(f"BENEFICIÁRIO: {nome_ben} (ID: {id_ben})")
-        print(f"CPF/CNPJ: {ben['CPF'] if pd.notna(ben['CPF']) else ben['CNPJ']}")
-        print(f"CAR: {ben['Código do CAR']}")
-        print("-" * 50)
-
-        # 1. Buscar Unidades de Reabilitação deste beneficiário
-        # O cadastro de unidades liga pelo nome do beneficiário
-        unidades_ben = df_und[df_und['Beneficiário'] == nome_ben]
-
-        if unidades_ben.empty:
-            print("Nenhuma unidade de reabilitação cadastrada.")
+        if caminho_tentativa:
+            dfs[chave] = pd.read_csv(caminho_tentativa).fillna("")
         else:
-            print("\n>>> UNIDADES DE REABILITAÇÃO E LOCALIZAÇÃO:")
-            for _, und in unidades_ben.iterrows():
-                id_und = und['ID und reabilitação']
-                tipo_und = und['Tipo de Und']
-                # Localização: Prioriza a da Unidade, se não tiver, usa a do Beneficiário
-                coord_und = und['Coordenada Geográfica da Und de Reab']
-                loc_final = coord_und if pd.notna(coord_und) and str(coord_und).strip() != "" else coord_ben
-                
-                print(f"- ID Unidade: {id_und} | Tipo: {tipo_und}")
-                print(f"  Localização (Coord): {loc_final}")
+            st.error(f"Arquivo não encontrado: {nome}")
+            return None, None, None
+            
+    return dfs['ben'], dfs['und'], dfs['doa']
 
-                # 2. Buscar Doações para esta unidade
-                doacoes_und = df_doa[df_doa['ID Und Reab'] == id_und].copy()
-                
-                if not doacoes_und.empty:
-                    # Extrair o ano da data (formato DD-MMM-AA)
-                    doacoes_und['Ano'] = doacoes_und['Data'].str.extract(r'(\d{2})$')
-                    doacoes_und['Ano'] = "20" + doacoes_und['Ano']
-                    
-                    print(f"  HISTÓRICO DE DOAÇÕES NESTA UNIDADE:")
-                    for _, doa in doacoes_und.iterrows():
-                        print(f"    * Fornecimento ID: {doa['ID fornecimento']} | Ano: {doa['Ano']} | Qtd: {doa['SomaDequant']} | Política: {doa['Política Pública']}")
-                else:
-                    print("    (Sem doações registradas para esta unidade)")
-        print("\n")
+try:
+    df_ben, df_und, df_doa = carregar_dados()
 
-# --- Interface Simples ---
-if __name__ == "__main__":
-    print("Ferramenta de Consulta Seagri - Mudas Nativas")
-    while True:
-        busca = input("Digite Nome, CPF, CNPJ, Telefone ou CAR (ou 'sair'): ")
-        if busca.lower() == 'sair': break
-        consultar(busca)
+    if df_ben is not None:
+        st.title("🌳 Sistema de Consulta Seagri - Reflorestar")
+        
+        # BARRA LATERAL
+        st.sidebar.header("🔍 Pesquisa")
+        busca = st.sidebar.text_input("Digite Nome, CPF, CNPJ ou CAR:")
+
+        if busca:
+            # Filtra em todas as colunas do cadastro de beneficiários
+            mask = df_ben.apply(lambda row: row.astype(str).str.contains(busca, case=False).any(), axis=1)
+            resultados = df_ben[mask]
+
+            if not resultados.empty:
+                for _, ben in resultados.iterrows():
+                    with st.expander(f"👤 Beneficiário: {ben['Nome']}", expanded=True):
+                        c1, c2, c3 = st.columns(3)
+                        c1.write(f"**ID:** {ben['ID Beneficiário']}")
+                        c2.write(f"**CPF/CNPJ:** {ben['CPF'] or ben['CNPJ']}")
+                        c3.write(f"**CAR:** {ben['Código do CAR']}")
+
+                        # Unidades e Doações
+                        unidades = df_und[df_und['Beneficiário'] == ben['Nome']]
+                        if not unidades.empty:
+                            m = folium.Map(location=[-15.7, -48.0], zoom_start=9)
+                            tem_mapa = False
+                            
+                            for _, u in unidades.iterrows():
+                                st.divider()
+                                st.subheader(f"📍 Unidade {u['ID und reabilitação']}")
+                                st.write(f"**Tipo:** {u['Tipo de Und']} | **Bacia:** {u['Unidade Hidro']}")
+                                
+                                # Tenta pegar coordenadas
+                                lat = dms_to_decimal(u['Coordenada Geográfica da Und de Reab']) or dms_to_decimal(ben['Coordenada Geo'])
+                                lon = -48.0 # Valor padrão caso não ache longitude exata no texto
+                                
+                                if lat:
+                                    folium.Marker([lat, lon], popup=f"Unidade {u['ID und reabilitação']}").add_to(m)
+                                    tem_mapa = True
+                                
+                                # Doações desta unidade
+                                doacoes = df_doa[df_doa['ID Und Reab'] == u['ID und reabilitação']]
+                                if not doacoes.empty:
+                                    st.write("**📦 Histórico de Doações:**")
+                                    st.dataframe(doacoes[['ID fornecimento', 'Data', 'SomaDequant', 'Política Pública']], hide_index=True)
+                                else:
+                                    st.info("Sem doações registradas para esta unidade.")
+                            
+                            if tem_mapa:
+                                st_folium(m, width=700, height=300, key=f"map_{ben['ID Beneficiário']}")
+                        else:
+                            st.warning("Nenhuma unidade de plantio vinculada.")
+            else:
+                st.error("Nenhum registro encontrado.")
+        else:
+            # Dashboard Inicial
+            st.info("Utilize a barra lateral para pesquisar um beneficiário.")
+            col1, col2 = st.columns(2)
+            col1.metric("Total Beneficiários", len(df_ben))
+            qtd_total = pd.to_numeric(df_doa['SomaDequant'], errors='coerce').sum()
+            col2.metric("Total de Mudas", f"{int(qtd_total):,}")
+
+except Exception as e:
+    st.error(f"Erro ao carregar sistema: {e}")
